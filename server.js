@@ -1949,3 +1949,8 @@ app.get('/api/debug/students', authenticateToken, async (req, res) => {
     res.status(500).json({ error: 'Error fetching students' });
   }
 });
+
+// Root endpoint for health check or friendly message
+app.get('/', (req, res) => {
+  res.json({ message: 'Welcome! The School API backend is running.' });
+});
