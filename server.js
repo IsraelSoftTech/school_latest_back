@@ -109,7 +109,8 @@ const corsOptions = {
     'http://localhost:3002',
     'http://localhost:3003',
     'http://localhost:3004',
-    'http://localhost:3005'
+    'http://localhost:3005',
+    'https://school-latest-front.onrender.com'
   ],
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'Authorization', 'Accept', 'Origin', 'X-Requested-With'],
