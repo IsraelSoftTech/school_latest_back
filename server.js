@@ -370,14 +370,63 @@ app.post('/api/change-password', authenticateToken, async (req, res) => {
 
 // Users endpoints
 app.get('/api/users', authenticateToken, async (req, res) => {
+  if (req.user.role !== 'admin') {
+    return res.status(403).json({ error: 'Only admin can view all users' });
+  }
   try {
-    const [users] = await pool.query('SELECT id, username, email, contact, created_at FROM users WHERE id = $1', [req.user.id]);
-    
-    console.log('Successfully fetched users:', users);
-    res.json(users);
+    const result = await pool.query('SELECT id, username, contact, role FROM users ORDER BY created_at DESC');
+    res.json(result.rows);
   } catch (error) {
-    console.error('Error fetching users:', error);
-    res.status(500).json({ error: 'Error fetching users' });
+    console.error('Error fetching all users:', error);
+    res.status(500).json({ error: 'Error fetching all users' });
+  }
+});
+
+// Admin: Delete user by id
+app.delete('/api/users/:id', authenticateToken, async (req, res) => {
+  if (req.user.role !== 'admin') {
+    return res.status(403).json({ error: 'Only admin can delete users' });
+  }
+  const userId = req.params.id;
+  try {
+    const result = await pool.query('DELETE FROM users WHERE id = $1', [userId]);
+    if (result.rowCount === 0) {
+      return res.status(404).json({ error: 'User not found' });
+    }
+    res.json({ message: 'User deleted successfully' });
+  } catch (error) {
+    console.error('Error deleting user:', error);
+    res.status(500).json({ error: 'Error deleting user' });
+  }
+});
+
+// Admin: Edit user by id
+app.put('/api/users/:id', authenticateToken, async (req, res) => {
+  if (req.user.role !== 'admin') {
+    return res.status(403).json({ error: 'Only admin can edit users' });
+  }
+  const userId = req.params.id;
+  const { username, contact, password, role } = req.body;
+  try {
+    let updateFields = ['username = $1', 'contact = $2', 'role = $3'];
+    let updateValues = [username, contact, role, userId];
+    let query = '';
+    if (password && password.trim() !== '') {
+      const hashedPassword = await bcrypt.hash(password, 10);
+      updateFields.push('password = $4');
+      updateValues = [username, contact, role, hashedPassword, userId];
+      query = `UPDATE users SET ${updateFields.join(', ')} WHERE id = $5`;
+    } else {
+      query = `UPDATE users SET ${updateFields.join(', ')} WHERE id = $4`;
+    }
+    const result = await pool.query(query, updateValues);
+    if (result.rowCount === 0) {
+      return res.status(404).json({ error: 'User not found' });
+    }
+    res.json({ message: 'User updated successfully' });
+  } catch (error) {
+    console.error('Error updating user:', error);
+    res.status(500).json({ error: 'Error updating user' });
   }
 });
 
