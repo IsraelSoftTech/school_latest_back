@@ -126,6 +126,22 @@ app.use(express.urlencoded({ extended: true }));
 app.use('/uploads', express.static('uploads')); // Serve uploaded files
 app.options('*', cors(corsOptions));
 
+// Global request logger middleware
+app.use((req, res, next) => {
+  let userInfo = '';
+  if (req.headers && req.headers.authorization) {
+    try {
+      const token = req.headers.authorization.split(' ')[1];
+      const decoded = require('jsonwebtoken').decode(token);
+      if (decoded) {
+        userInfo = ` | user: ${decoded.username} (role: ${decoded.role})`;
+      }
+    } catch (e) {}
+  }
+  console.log(`[REQ] ${req.method} ${req.originalUrl}${userInfo}`);
+  next();
+});
+
 // Error handling middleware
 app.use((err, req, res, next) => {
   console.error('Error:', err);
@@ -569,25 +585,47 @@ app.put('/api/students/:id', authenticateToken, upload.single('student_picture')
     next_class, 
     previous_average, 
     guardian_contact, 
-    vocational_training 
+    vocational_training, 
+    class_id // <-- add class_id
   } = req.body;
   const userId = req.user.id;
+  const userRole = req.user.role;
   const studentId = req.params.id;
-  
   // Get file path from uploaded file
   const student_picture = req.file ? `/uploads/${req.file.filename}` : null;
-
   try {
-    // First verify the student belongs to the user
-    const resultStudent = await pool.query(
-      'SELECT * FROM students WHERE id = $1 AND user_id = $2',
-      [studentId, userId]
-    );
-    if (resultStudent.rows.length === 0) {
-      return res.status(404).json({ error: 'Student not found' });
+    console.log(`[DEBUG] PUT /api/students/${studentId} by user ${userId} (role: ${userRole})`);
+    let resultStudent;
+    if (userRole === 'admin') {
+      // Admin can edit any student
+      resultStudent = await pool.query('SELECT * FROM students WHERE id = $1', [studentId]);
+      if (resultStudent.rows.length === 0) {
+        console.log(`[DEBUG] Student with id ${studentId} does not exist.`);
+        return res.status(404).json({ error: 'Student does not exist.' });
+      }
+    } else {
+      // Regular users can only edit their own students
+      resultStudent = await pool.query('SELECT * FROM students WHERE id = $1 AND user_id = $2', [studentId, userId]);
+      if (resultStudent.rows.length === 0) {
+        // Check if student exists at all
+        const checkStudent = await pool.query('SELECT * FROM students WHERE id = $1', [studentId]);
+        if (checkStudent.rows.length === 0) {
+          console.log(`[DEBUG] Student with id ${studentId} does not exist.`);
+          return res.status(404).json({ error: 'Student does not exist.' });
+        } else {
+          console.log(`[DEBUG] User ${userId} (role: ${userRole}) not permitted to edit student ${studentId}.`);
+          return res.status(403).json({ error: 'Not permitted to edit this student.' });
+        }
+      }
     }
-
-    // Build update query dynamically based on whether a new picture is provided
+    // If class_id is provided, validate it
+    if (class_id) {
+      const classCheck = await pool.query('SELECT id FROM classes WHERE id = $1', [class_id]);
+      if (classCheck.rows.length === 0) {
+        return res.status(400).json({ error: 'Selected class does not exist.' });
+      }
+    }
+    // Build update query dynamically based on whether a new picture or class_id is provided
     let updateFields = [
       'full_name = $1',
       'sex = $2',
@@ -608,12 +646,22 @@ app.put('/api/students/:id', authenticateToken, upload.single('student_picture')
       updateValues.push(student_picture);
       paramIndex++;
     }
+    if (class_id) {
+      updateFields.push(`class_id = $${paramIndex}`);
+      updateValues.push(class_id);
+      paramIndex++;
+    }
     updateFields = updateFields.join(', ');
-    updateValues.push(studentId, userId);
-    const updateQuery = `UPDATE students SET ${updateFields} WHERE id = $${paramIndex} AND user_id = $${paramIndex + 1}`;
-
-    // Update the student
-    await pool.query(updateQuery, updateValues);
+    updateValues.push(studentId);
+    const updateQuery = userRole === 'admin'
+      ? `UPDATE students SET ${updateFields} WHERE id = $${paramIndex}`
+      : `UPDATE students SET ${updateFields} WHERE id = $${paramIndex} AND user_id = $${paramIndex + 1}`;
+    if (userRole === 'admin') {
+      await pool.query(updateQuery, updateValues);
+    } else {
+      updateValues.push(userId);
+      await pool.query(updateQuery, updateValues);
+    }
     res.json({ message: 'Student updated successfully' });
   } catch (error) {
     console.error('Error updating student:', error);
@@ -1985,14 +2033,16 @@ app.get('/api/debug/classes', authenticateToken, async (req, res) => {
 
 // Debug endpoint to list all students and their classes
 app.get('/api/debug/students', authenticateToken, async (req, res) => {
+  if (req.user.role !== 'admin') {
+    return res.status(403).json({ error: 'Only admin can access debug students' });
+  }
   try {
     const result = await pool.query(`
-      SELECT s.id, s.full_name, s.user_id, s.class_id, c.name as class_name 
-      FROM students s 
-      LEFT JOIN classes c ON s.class_id = c.id 
+      SELECT s.id, s.full_name, s.user_id, s.class_id, u.username as registered_by
+      FROM students s
+      LEFT JOIN users u ON s.user_id = u.id
       ORDER BY s.created_at DESC
     `);
-    console.log(`[DEBUG] All students and their classes:`, result.rows);
     res.json(result.rows);
   } catch (error) {
     console.error('Error fetching debug students:', error);
