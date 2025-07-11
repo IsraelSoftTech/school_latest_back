@@ -47,4 +47,31 @@ async function fixStudentClass() {
   }
 }
 
+async function fixNextClassNames() {
+  try {
+    console.log('=== FIXING next_class FIELD TO CLASS NAME ===');
+    // Find students whose next_class is a number (likely a class ID)
+    const studentsWithIdNextClass = await pool.query('SELECT id, next_class FROM students WHERE next_class ~ E"^\\d+$"');
+    console.log(`Found ${studentsWithIdNextClass.rows.length} students with numeric next_class:`);
+    for (const row of studentsWithIdNextClass.rows) {
+      const classId = parseInt(row.next_class, 10);
+      const classRes = await pool.query('SELECT name FROM classes WHERE id = $1', [classId]);
+      if (classRes.rows.length > 0) {
+        const className = classRes.rows[0].name;
+        await pool.query('UPDATE students SET next_class = $1 WHERE id = $2', [className, row.id]);
+        console.log(`Updated student ID ${row.id}: next_class set to '${className}'`);
+      } else {
+        console.log(`Student ID ${row.id}: class ID ${classId} not found, skipping.`);
+      }
+    }
+    console.log('=== FIX COMPLETE ===');
+  } catch (error) {
+    console.error('Error fixing next_class field:', error);
+  } finally {
+    await pool.end();
+  }
+}
+
+// Run the fix
+fixNextClassNames();
 fixStudentClass(); 

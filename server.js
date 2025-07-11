@@ -450,7 +450,7 @@ app.put('/api/users/:id', authenticateToken, async (req, res) => {
 
 // Students endpoints
 app.post('/api/students', authenticateToken, upload.single('student_picture'), async (req, res) => {
-  const { 
+  let { 
     full_name, 
     sex, 
     date_of_birth, 
@@ -466,20 +466,20 @@ app.post('/api/students', authenticateToken, upload.single('student_picture'), a
   } = req.body;
   const userId = req.user.id;
   const userRole = req.user.role;
-  
   // Get file path from uploaded file
   const student_picture = req.file ? `/uploads/${req.file.filename}` : null;
-
   try {
     // Validate class_id
     if (!class_id) {
       return res.status(400).json({ error: 'Class is required for student registration.' });
     }
-    // Check if class exists
-    const classCheck = await pool.query('SELECT id FROM classes WHERE id = $1', [class_id]);
+    // Check if class exists and get its name
+    const classCheck = await pool.query('SELECT id, name FROM classes WHERE id = $1', [class_id]);
     if (classCheck.rows.length === 0) {
       return res.status(400).json({ error: 'Selected class does not exist.' });
     }
+    // Always set next_class to the class name from DB
+    next_class = classCheck.rows[0].name;
     // Check role-based restrictions
     if (userRole === 'student') {
       // Students can only register themselves (1 student max)
@@ -529,11 +529,12 @@ app.get('/api/students', authenticateToken, async (req, res) => {
   try {
     let students, query, params;
     if (userRole === 'admin') {
-      // Admin: see all students for the year with user info
+      // Admin: see all students for the year with user info and class name
       if (year) {
         query = `
-          SELECT s.*, u.username as registered_by 
+          SELECT s.*, c.name as class_name, u.username as registered_by 
           FROM students s 
+          LEFT JOIN classes c ON s.class_id = c.id
           LEFT JOIN users u ON s.user_id = u.id 
           WHERE EXTRACT(YEAR FROM s.created_at) = $1 
           ORDER BY s.created_at DESC
@@ -541,20 +542,21 @@ app.get('/api/students', authenticateToken, async (req, res) => {
         params = [year];
       } else {
         query = `
-          SELECT s.*, u.username as registered_by 
+          SELECT s.*, c.name as class_name, u.username as registered_by 
           FROM students s 
+          LEFT JOIN classes c ON s.class_id = c.id
           LEFT JOIN users u ON s.user_id = u.id 
           ORDER BY s.created_at DESC
         `;
         params = [];
       }
     } else {
-      // Regular user: only see their own students
+      // Regular user: only see their own students, with class name
       if (year) {
-        query = 'SELECT * FROM students WHERE user_id = $1 AND EXTRACT(YEAR FROM created_at) = $2 ORDER BY created_at DESC';
+        query = `SELECT s.*, c.name as class_name FROM students s LEFT JOIN classes c ON s.class_id = c.id WHERE s.user_id = $1 AND EXTRACT(YEAR FROM s.created_at) = $2 ORDER BY s.created_at DESC`;
         params = [userId, year];
       } else {
-        query = 'SELECT * FROM students WHERE user_id = $1 ORDER BY created_at DESC';
+        query = `SELECT s.*, c.name as class_name FROM students s LEFT JOIN classes c ON s.class_id = c.id WHERE s.user_id = $1 ORDER BY s.created_at DESC`;
         params = [userId];
       }
     }
@@ -566,7 +568,7 @@ app.get('/api/students', authenticateToken, async (req, res) => {
     students = result.rows;
     
     console.log('Found students:', students.length);
-    console.log('Students:', students.map(s => ({ id: s.id, name: s.full_name, user_id: s.user_id })));
+    console.log('Students:', students.map(s => ({ id: s.id, name: s.full_name, user_id: s.user_id, class_name: s.class_name })));
     
     res.json(students);
   } catch (error) {
@@ -576,7 +578,7 @@ app.get('/api/students', authenticateToken, async (req, res) => {
 });
 
 app.put('/api/students/:id', authenticateToken, upload.single('student_picture'), async (req, res) => {
-  const { 
+  let { 
     full_name, 
     sex, 
     date_of_birth, 
@@ -596,6 +598,15 @@ app.put('/api/students/:id', authenticateToken, upload.single('student_picture')
   // Get file path from uploaded file
   const student_picture = req.file ? `/uploads/${req.file.filename}` : null;
   try {
+    // If class_id is provided, validate it and get its name
+    if (class_id) {
+      const classCheck = await pool.query('SELECT id, name FROM classes WHERE id = $1', [class_id]);
+      if (classCheck.rows.length === 0) {
+        return res.status(400).json({ error: 'Selected class does not exist.' });
+      }
+      // Always set next_class to the class name from DB
+      next_class = classCheck.rows[0].name;
+    }
     console.log(`[DEBUG] PUT /api/students/${studentId} by user ${userId} (role: ${userRole})`);
     let resultStudent;
     if (userRole === 'admin') {
